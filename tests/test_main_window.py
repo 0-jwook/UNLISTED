@@ -181,3 +181,53 @@ def test_title_update_targets_the_right_item_after_deletion(qapp, tmp_path):
         "https://www.youtube.com/watch?v=bbbbbbbbbbb",
         "세 번째 곡",
     ]
+
+
+def test_breakable_keeps_visible_text_and_adds_wrap_points():
+    from ui.main_window import breakable
+
+    url = "https://www.youtube.com/watch?v=lZHyUw7LWSw&t=10s"
+    wrapped = breakable(url)
+    assert wrapped.replace("​", "") == url
+    assert "/​" in wrapped and "?​" in wrapped and "&​" in wrapped
+
+
+def test_breakable_splits_long_unbroken_runs():
+    from ui.main_window import breakable
+
+    run = "PL" + "x" * 80
+    wrapped = breakable(run)
+    assert wrapped.replace("​", "") == run
+    # 구분 문자가 없어도 20자마다 끊을 수 있어야 한다
+    chunks = wrapped.split("​")
+    assert all(len(c) <= 20 for c in chunks)
+
+
+def test_detail_panel_is_scrollable_with_minimum_width(qapp, tmp_path):
+    from PySide6.QtWidgets import QScrollArea
+
+    from ui.main_window import DETAIL_MIN_WIDTH
+
+    window = _window(qapp, tmp_path, tools=None, missing=["yt-dlp"])
+    scrolls = [s for s in window.findChildren(QScrollArea) if s.isAncestorOf(window._d_url)]
+    assert scrolls, "상세 패널이 스크롤 영역 안에 있어야 합니다"
+    assert scrolls[0].minimumWidth() == DETAIL_MIN_WIDTH
+    assert window._d_url.wordWrap()
+    assert DETAIL_MIN_WIDTH >= 340
+
+
+def test_long_detail_text_is_wrapped_not_clipped(qapp, tmp_path):
+    from musiclib.models import JobResult
+
+    window = _window(qapp, tmp_path, tools=None, missing=["yt-dlp"])
+    long_url = "https://www.youtube.com/watch?v=" + "a" * 11 + "&list=" + "b" * 120
+    window._add_urls([long_url])
+    window._items[0].result = JobResult(JobStatus.FAILED, "검증 실패: " + "가" * 200)
+    window._table.selectRow(0)
+    window._show_detail()
+    window.resize(980, 640)
+    window.show()
+    qapp.processEvents()
+    # 줄바꿈 가능한 텍스트이므로 높이가 한 줄보다 커야 한다 (잘리지 않고 여러 줄로 보임)
+    assert window._d_url.height() > window._d_url.fontMetrics().height()
+    assert window._d_result.height() > window._d_result.fontMetrics().height()

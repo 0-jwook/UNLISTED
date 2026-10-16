@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import itertools
 import os
+import re
 import subprocess
 import threading
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
@@ -32,6 +34,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -47,6 +50,16 @@ from ui.settings import AppSettings
 from ui.worker import Ask, Bridge, DownloadWorker, TitleLookup
 
 COL_TITLE, COL_STATUS, COL_PROGRESS = range(3)
+DETAIL_MIN_WIDTH = 340
+# 공백이 없는 긴 문자열(URL 등)도 줄바꿈되도록 끊을 수 있는 위치를 넣는다
+BREAK_AFTER = str.maketrans({"/": "/\u200b", "?": "?\u200b", "&": "&\u200b", "=": "=\u200b", "-": "-\u200b", "_": "_\u200b"})
+# 구분 문자가 없는 긴 덩어리는 이 길이마다 끊을 수 있게 한다
+LONG_RUN = re.compile(r"(\S{20})(?=\S)")
+
+
+def breakable(text: str) -> str:
+    """긴 문자열이 상세 패널에서 잘리지 않도록 줄바꿈 위치(영폭 공백)를 넣는다. 보이는 글자는 같다."""
+    return LONG_RUN.sub("\\1\u200b", text.translate(BREAK_AFTER))
 # 실행 중이라 지우거나 다시 시작할 수 없는 상태
 RUNNING = {JobStatus.DOWNLOADING, JobStatus.THUMBNAIL, JobStatus.TAGGING, JobStatus.VERIFYING}
 # 다시 시작할 수 있는 상태 (실패, 취소, 건너뜀)
@@ -136,8 +149,8 @@ class MainWindow(QMainWindow):
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
         splitter.addWidget(self._table)
         splitter.addWidget(self._build_detail_panel())
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 3)
         root.addWidget(splitter, 1)
 
         # 실행 버튼
@@ -192,17 +205,17 @@ class MainWindow(QMainWindow):
         box = QGroupBox("상세 정보")
         layout = QVBoxLayout(box)
         form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         self._d_url = QLabel("-")
         self._d_url.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self._d_url.setWordWrap(True)
         self._d_file = QLabel("-")
-        self._d_file.setWordWrap(True)
         self._d_artist = QLabel("-")
         self._d_title = QLabel("-")
         self._d_album = QLabel("-")
-        self._d_album.setWordWrap(True)
         self._d_result = QLabel("-")
-        self._d_result.setWordWrap(True)
+        # 긴 글자는 줄바꿈해서 모두 보이게 한다
+        for label in (self._d_url, self._d_file, self._d_artist, self._d_title, self._d_album, self._d_result):
+            label.setWordWrap(True)
         for label, widget in (
             ("URL", self._d_url),
             ("파일명", self._d_file),
@@ -222,7 +235,14 @@ class MainWindow(QMainWindow):
         reveal.clicked.connect(self._reveal_selected)
         layout.addWidget(reveal, 0, Qt.AlignHCenter)
         layout.addStretch(1)
-        return box
+        # 내용이 길어져도 패널이 잘리지 않도록 스크롤 영역에 넣는다
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setMinimumWidth(DETAIL_MIN_WIDTH)
+        scroll.setWidget(box)
+        return scroll
 
     # ---------- 항목 찾기 ----------
 
@@ -487,18 +507,19 @@ class MainWindow(QMainWindow):
         if len(rows) != 1:
             return
         item = self._items[rows[0]]
-        self._d_url.setText(item.url)
-        self._d_file.setText(item.title)
+        self._d_url.setText(breakable(item.url))
+        self._d_file.setText(breakable(item.title))
         result = item.result
         if result is None:
             for label in (self._d_artist, self._d_title, self._d_album, self._d_result):
                 label.setText("-")
             self._d_thumb.clear()
             return
-        self._d_artist.setText(result.artist or "-")
-        self._d_title.setText(result.title or "-")
-        self._d_album.setText(result.album or "-")
-        self._d_result.setText(result.status.value + (f" — {result.detail}" if result.detail else ""))
+        self._d_artist.setText(breakable(result.artist or "-"))
+        self._d_title.setText(breakable(result.title or "-"))
+        self._d_album.setText(breakable(result.album or "-"))
+        detail = f" — {result.detail}" if result.detail else ""
+        self._d_result.setText(breakable(result.status.value + detail))
         if result.thumbnail and result.thumbnail.exists():
             pixmap = QPixmap(str(result.thumbnail))
             self._d_thumb.setPixmap(pixmap.scaled(180, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation))
