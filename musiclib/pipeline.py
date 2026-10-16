@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .downloader import download, ensure_jpeg, existing_outputs, expected_stem
+from .cleanup import remove_intermediates, snapshot
 from .metadata import Metadata, verify, write_tags
 from .models import JobResult, JobStatus
 from .naming import base_name, parse_artist_title
@@ -52,10 +53,14 @@ def process_url(
     tools: Tools,
     hooks: Hooks = Hooks(),
     cancel: Optional[threading.Event] = None,
+    cleanup: bool = True,
 ) -> JobResult:
-    """URL 하나를 처리한다. 실패·취소도 JobResult로 돌려주며 예외를 밖으로 내보내지 않는다."""
+    """URL 하나를 처리한다. 실패·취소도 JobResult로 돌려주며 예외를 밖으로 내보내지 않는다.
+
+    cleanup이 True면 검증 성공 후 썸네일과 ExifTool 백업을 지운다(완성 M4A는 남긴다).
+    """
     try:
-        return _process(url, out_dir, tools, hooks, cancel)
+        return _process(url, out_dir, tools, hooks, cancel, cleanup)
     except Cancelled as e:
         hooks.log(str(e))
         hooks.on_status(JobStatus.CANCELLED)
@@ -76,6 +81,7 @@ def _process(
     tools: Tools,
     hooks: Hooks,
     cancel: Optional[threading.Event],
+    cleanup: bool,
 ) -> JobResult:
     if not is_valid_url(url):
         hooks.on_status(JobStatus.FAILED)
@@ -94,6 +100,8 @@ def _process(
             return JobResult(JobStatus.SKIPPED, "기존 파일 유지")
         overwrite = True
 
+    # 정리할 때 "이번 작업에서 새로 생긴 파일"을 가리기 위해 다운로드 전 상태를 기록한다
+    before = snapshot(out_dir)
     hooks.on_status(JobStatus.DOWNLOADING)
     hooks.log("오디오 다운로드 중")
     audio = download(
@@ -134,6 +142,14 @@ def _process(
     if problems:
         hooks.on_status(JobStatus.FAILED)
         return JobResult(JobStatus.FAILED, "검증 실패: " + "; ".join(problems), problems=problems, **info)
+
+    removed: list[str] = []
+    if cleanup:
+        removed = remove_intermediates(out_dir, album, before, overwrite)
+        if removed:
+            hooks.log(f"중간 파일 정리: {', '.join(removed)}")
+            if jpg.name in removed:
+                info["thumbnail"] = None
 
     hooks.on_status(JobStatus.DONE)
     return JobResult(JobStatus.DONE, audio.name, **info)
