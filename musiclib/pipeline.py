@@ -120,9 +120,11 @@ def _process(
         artist, title = hooks.ask_artist_title(album)
     meta = Metadata(album=album, artist=artist or None, title=title or None)
 
+    info = dict(audio=audio, thumbnail=jpg, artist=meta.artist, title=meta.title, album=meta.album)
+
     if not hooks.confirm_write(meta):
         hooks.on_status(JobStatus.SKIPPED)
-        return JobResult(JobStatus.SKIPPED, f"사용자 취소(다운로드 파일 유지: {audio.name})", audio=audio)
+        return JobResult(JobStatus.SKIPPED, f"사용자 취소(다운로드 파일 유지: {audio.name})", **info)
 
     hooks.on_status(JobStatus.TAGGING)
     write_tags(tools.exiftool, audio, jpg, meta, env=tools.env)
@@ -131,7 +133,7 @@ def _process(
     problems = verify(tools.exiftool, audio, jpg, meta, env=tools.env)
     if problems:
         hooks.on_status(JobStatus.FAILED)
-        return JobResult(JobStatus.FAILED, "검증 실패: " + "; ".join(problems), audio=audio, problems=problems)
+        return JobResult(JobStatus.FAILED, "검증 실패: " + "; ".join(problems), problems=problems, **info)
 
     hooks.on_status(JobStatus.DONE)
-    return JobResult(JobStatus.DONE, audio.name, audio=audio)
+    return JobResult(JobStatus.DONE, audio.name, **info)

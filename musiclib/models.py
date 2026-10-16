@@ -25,4 +25,9 @@ class JobResult:
     status: JobStatus
     detail: str = ""
     audio: Optional[Path] = None
+    thumbnail: Optional[Path] = None
+    # 판단하거나 입력받은 메타데이터 (상세 패널 표시용). 기록 전에 중단되면 None
+    artist: Optional[str] = None
+    title: Optional[str] = None
+    album: Optional[str] = None
     problems: list[str] = field(default_factory=list)
