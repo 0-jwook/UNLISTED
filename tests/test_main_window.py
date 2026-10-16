@@ -4,7 +4,7 @@ import time
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest  # noqa: E402
-from PySide6.QtCore import QSettings  # noqa: E402
+from PySide6.QtCore import QSettings, QThreadPool  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 from musiclib.models import JobStatus  # noqa: E402
@@ -22,6 +22,20 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.fixture(autouse=True)
+def _close_windows(qapp):
+    yield
+    # 창을 닫고 백그라운드 제목 조회가 끝난 뒤에 테스트를 마친다 (삭제 중 신호 사용 방지)
+    for window in _OPENED:
+        window.close()
+    _OPENED.clear()
+    QThreadPool.globalInstance().waitForDone(10_000)
+    qapp.processEvents()
+
+
+_OPENED: list[MainWindow] = []
+
+
 def _settings(tmp_path):
     store = QSettings(str(tmp_path / "test.ini"), QSettings.IniFormat)
     return AppSettings(store)
@@ -30,6 +44,7 @@ def _settings(tmp_path):
 def _window(qapp, tmp_path, tools=None, missing=()):
     window = MainWindow(_settings(tmp_path), tools, list(missing))
     window._out_dir = tmp_path / "out"
+    _OPENED.append(window)
     return window
 
 
