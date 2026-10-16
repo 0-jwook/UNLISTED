@@ -75,7 +75,7 @@ class DownloadWorker(QThread):
             confirm_write=lambda meta: self._ask(index, "confirm_write", meta, default=None),
             on_status=lambda status: self.bridge.status.emit(index, status),
             on_progress=lambda percent: self.bridge.progress.emit(index, percent),
-            log=lambda message: self.bridge.log.emit(f"[{index + 1}] {message}"),
+            log=lambda message: self.bridge.log.emit(f"[{index}] {message}"),
         )
 
     def _ask(self, index: int, kind: str, payload: Any, default: Any) -> Any:

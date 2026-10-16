@@ -79,7 +79,7 @@ def test_start_is_disabled_without_tools(qapp, tmp_path):
     assert not window._start_btn.isEnabled()
 
 
-def test_remove_only_waiting_items_and_reindexes(qapp, tmp_path):
+def test_remove_selected_item_and_reindexes(qapp, tmp_path):
     window = _window(qapp, tmp_path, tools=None, missing=["yt-dlp"])
     window._add_urls([
         "https://www.youtube.com/watch?v=aaaaaaaaaaa",
@@ -114,3 +114,70 @@ def test_full_run_with_fake_tools_shows_result(qapp, tmp_path, monkeypatch):
     assert (window._out_dir / f"{TITLE}.m4a").exists()
     assert window._table.item(0, 1).text() == JobStatus.DONE.value
     assert window._table.cellWidget(0, 2).value() == 100
+
+
+def _select(window, *rows):
+    """여러 행을 함께 선택한다. selectRow()는 이전 선택을 바꾸므로 선택 모델을 직접 쓴다."""
+    from PySide6.QtCore import QItemSelectionModel
+
+    window._table.clearSelection()
+    selection = window._table.selectionModel()
+    for row in rows:
+        index = window._table.model().index(row, 0)
+        selection.select(index, QItemSelectionModel.Select | QItemSelectionModel.Rows)
+
+
+def test_can_remove_finished_and_failed_items(qapp, tmp_path):
+    from musiclib.models import JobStatus
+
+    window = _window(qapp, tmp_path, tools=None, missing=["yt-dlp"])
+    window._add_urls([
+        "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+        "https://www.youtube.com/watch?v=bbbbbbbbbbb",
+    ])
+    window._items[0].status = JobStatus.FAILED
+    window._items[1].status = JobStatus.DONE
+    _select(window, 0, 1)
+    window._refresh_controls()
+    assert window._remove_btn.isEnabled()
+    window._remove_selected()
+    assert window._items == []
+    assert window._table.rowCount() == 0
+
+
+def test_restart_requeues_only_restartable_items(qapp, tmp_path, monkeypatch):
+    from musiclib.models import JobStatus
+
+    window = _window(qapp, tmp_path, tools=None, missing=["yt-dlp"])
+    window._add_urls([
+        "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+        "https://www.youtube.com/watch?v=bbbbbbbbbbb",
+        "https://www.youtube.com/watch?v=ccccccccccc",
+    ])
+    window._items[0].status = JobStatus.CANCELLED
+    window._items[1].status = JobStatus.DONE
+    window._items[2].status = JobStatus.SKIPPED
+    started = []
+    monkeypatch.setattr(MainWindow, "_start", lambda self: started.append(True))
+    _select(window, 0, 1, 2)
+    window._restart_selected()
+    assert [i.status for i in window._items] == [JobStatus.WAITING, JobStatus.DONE, JobStatus.WAITING]
+    assert started == [True]
+
+
+def test_title_update_targets_the_right_item_after_deletion(qapp, tmp_path):
+    window = _window(qapp, tmp_path, tools=None, missing=["yt-dlp"])
+    window._add_urls([
+        "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+        "https://www.youtube.com/watch?v=bbbbbbbbbbb",
+        "https://www.youtube.com/watch?v=ccccccccccc",
+    ])
+    third_uid = window._items[2].uid
+    _select(window, 0)
+    window._remove_selected()
+    # 앞 항목을 지워 행 번호가 바뀌어도, 고정 번호로 온 제목은 원래 항목에 붙어야 한다
+    window._bridge.title_ready.emit(third_uid, "세 번째 곡")
+    assert [i.title for i in window._items] == [
+        "https://www.youtube.com/watch?v=bbbbbbbbbbb",
+        "세 번째 곡",
+    ]

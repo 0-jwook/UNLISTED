@@ -1,7 +1,11 @@
-"""메인 창: URL 입력·목록·상세 패널·로그·저장 위치. 실제 작업은 DownloadWorker가 맡는다."""
+"""메인 창: URL 입력·목록·상세 패널·로그·저장 위치. 실제 작업은 DownloadWorker가 맡는다.
+
+목록 항목은 uid(추가 순서의 고정 번호)로 구분한다. 행 번호는 삭제하면 바뀌므로 신호 처리에 쓰지 않는다.
+"""
 
 from __future__ import annotations
 
+import itertools
 import os
 import subprocess
 import threading
@@ -43,11 +47,15 @@ from ui.settings import AppSettings
 from ui.worker import Ask, Bridge, DownloadWorker, TitleLookup
 
 COL_TITLE, COL_STATUS, COL_PROGRESS = range(3)
-FINISHED = {JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.SKIPPED}
+# 실행 중이라 지우거나 다시 시작할 수 없는 상태
+RUNNING = {JobStatus.DOWNLOADING, JobStatus.THUMBNAIL, JobStatus.TAGGING, JobStatus.VERIFYING}
+# 다시 시작할 수 있는 상태 (실패, 취소, 건너뜀)
+RESTARTABLE = {JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.SKIPPED}
 
 
 @dataclass
 class Item:
+    uid: int
     url: str
     title: str  # 영상 제목(파일명). 조회 전에는 URL을 보여준다
     status: JobStatus = JobStatus.WAITING
@@ -66,6 +74,7 @@ class MainWindow(QMainWindow):
         self._missing = missing
         self._out_dir = settings.out_dir()
         self._items: list[Item] = []
+        self._uids = itertools.count(1)
         self._video_ids: set[str] = set()
         self._worker: Optional[DownloadWorker] = None
         self._cancel: Optional[threading.Event] = None
@@ -122,8 +131,9 @@ class MainWindow(QMainWindow):
         self._table.horizontalHeader().resizeSection(COL_STATUS, 130)
         self._table.horizontalHeader().resizeSection(COL_PROGRESS, 150)
         self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self._table.itemSelectionChanged.connect(self._show_detail)
+        self._table.itemSelectionChanged.connect(self._on_selection_changed)
         splitter.addWidget(self._table)
         splitter.addWidget(self._build_detail_panel())
         splitter.setStretchFactor(0, 3)
@@ -134,6 +144,9 @@ class MainWindow(QMainWindow):
         action_row = QHBoxLayout()
         self._remove_btn = QPushButton("선택 삭제")
         self._remove_btn.clicked.connect(self._remove_selected)
+        self._restart_btn = QPushButton("선택 다시 시작")
+        self._restart_btn.setToolTip("실패, 취소, 건너뜀 항목을 다시 대기열에 넣고 바로 시작합니다")
+        self._restart_btn.clicked.connect(self._restart_selected)
         self._cleanup_box = QCheckBox("완료 후 썸네일·백업 파일 삭제")
         self._cleanup_box.setToolTip("완성된 M4A만 남기고, 이번 작업에서 만든 썸네일과 백업을 지웁니다")
         self._cleanup_box.setChecked(self._settings.cleanup_enabled())
@@ -144,6 +157,7 @@ class MainWindow(QMainWindow):
         self._cancel_btn = QPushButton("취소")
         self._cancel_btn.clicked.connect(self._cancel_run)
         action_row.addWidget(self._remove_btn)
+        action_row.addWidget(self._restart_btn)
         action_row.addStretch(1)
         action_row.addWidget(self._cleanup_box)
         action_row.addWidget(self._cancel_btn)
@@ -210,6 +224,21 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
         return box
 
+    # ---------- 항목 찾기 ----------
+
+    def _row_of(self, uid: int) -> Optional[int]:
+        for row, item in enumerate(self._items):
+            if item.uid == uid:
+                return row
+        return None
+
+    def _item_of(self, uid: int) -> Optional[Item]:
+        row = self._row_of(uid)
+        return None if row is None else self._items[row]
+
+    def _selected_rows(self) -> list[int]:
+        return sorted({index.row() for index in self._table.selectedIndexes()})
+
     # ---------- URL 목록 ----------
 
     def _add_from_input(self) -> None:
@@ -227,59 +256,82 @@ class MainWindow(QMainWindow):
             if not is_valid_url(url):
                 self._log(f"잘못된 URL 형식이라 추가하지 않음: {url}")
                 continue
-            vid = video_id(url)
-            key = vid or url
+            key = video_id(url) or url
             if key in self._video_ids:
                 self._log(f"이미 목록에 있는 URL이라 건너뜀: {url}")
                 continue
             self._video_ids.add(key)
-            index = len(self._items)
-            self._items.append(Item(url=url, title=url))
-            self._insert_row(index)
+            item = Item(uid=next(self._uids), url=url, title=url)
+            self._items.append(item)
+            self._insert_row(len(self._items) - 1)
+            self._lookup_title(item.uid, url)
             added += 1
-            self._lookup_title(index, url)
         if added:
             self.statusBar().showMessage(f"{added}개 추가됨")
         self._refresh_controls()
 
-    def _insert_row(self, index: int) -> None:
-        self._table.insertRow(index)
-        self._table.setItem(index, COL_TITLE, QTableWidgetItem())
-        self._table.setItem(index, COL_STATUS, QTableWidgetItem())
+    def _insert_row(self, row: int) -> None:
+        self._table.insertRow(row)
+        self._table.setItem(row, COL_TITLE, QTableWidgetItem())
+        self._table.setItem(row, COL_STATUS, QTableWidgetItem())
         bar = QProgressBar()
         bar.setRange(0, 100)
         bar.setTextVisible(True)
-        self._table.setCellWidget(index, COL_PROGRESS, bar)
-        self._refresh_row(index)
+        self._table.setCellWidget(row, COL_PROGRESS, bar)
+        self._refresh_row(row)
 
-    def _refresh_row(self, index: int) -> None:
-        item = self._items[index]
-        self._table.item(index, COL_TITLE).setText(item.title)
-        self._table.item(index, COL_STATUS).setText(item.status.value)
-        bar = self._table.cellWidget(index, COL_PROGRESS)
+    def _refresh_row(self, row: int) -> None:
+        item = self._items[row]
+        self._table.item(row, COL_TITLE).setText(item.title)
+        self._table.item(row, COL_STATUS).setText(item.status.value)
+        bar = self._table.cellWidget(row, COL_PROGRESS)
         bar.setValue(int(item.progress))
 
-    def _lookup_title(self, index: int, url: str) -> None:
+    def _refresh_all_rows(self) -> None:
+        for row in range(len(self._items)):
+            self._refresh_row(row)
+
+    def _lookup_title(self, uid: int, url: str) -> None:
         if self._tools is None:
             return
         QThreadPool.globalInstance().start(
-            TitleLookup(index, url, self._tools.ytdlp, self._tools.env, self._bridge)
+            TitleLookup(uid, url, self._tools.ytdlp, self._tools.env, self._bridge)
         )
 
     def _remove_selected(self) -> None:
         if self._is_running():
             return
-        rows = sorted({i.row() for i in self._table.selectedIndexes()}, reverse=True)
-        for row in rows:
-            if self._items[row].status is not JobStatus.WAITING:
+        rows = self._selected_rows()
+        if not rows:
+            self.statusBar().showMessage("삭제할 항목을 먼저 선택하세요")
+            return
+        removed = 0
+        for row in reversed(rows):
+            item = self._items[row]
+            if item.status in RUNNING:
                 continue
-            self._video_ids.discard(video_id(self._items[row].url) or self._items[row].url)
+            self._video_ids.discard(video_id(item.url) or item.url)
             del self._items[row]
             self._table.removeRow(row)
-        # 행 번호가 바뀌었으므로 목록 전체를 다시 그린다
-        for index in range(len(self._items)):
-            self._refresh_row(index)
+            removed += 1
+        self._refresh_all_rows()
+        self._log(f"{removed}개 항목을 목록에서 삭제했습니다 (저장된 파일은 그대로 둡니다)")
         self._refresh_controls()
+
+    def _restart_selected(self) -> None:
+        if self._is_running():
+            return
+        restartable = [self._items[r] for r in self._selected_rows() if self._items[r].status in RESTARTABLE]
+        if not restartable:
+            self.statusBar().showMessage("다시 시작할 항목(실패·취소·건너뜀)을 선택하세요")
+            return
+        for item in restartable:
+            item.status = JobStatus.WAITING
+            item.progress = 0.0
+            item.result = None
+        self._refresh_all_rows()
+        self._log(f"{len(restartable)}개 항목을 다시 대기열에 넣었습니다")
+        self._start()
 
     # ---------- 실행 ----------
 
@@ -289,7 +341,7 @@ class MainWindow(QMainWindow):
     def _start(self) -> None:
         if self._tools is None or self._is_running():
             return
-        jobs = [(i, item.url) for i, item in enumerate(self._items) if item.status is JobStatus.WAITING]
+        jobs = [(item.uid, item.url) for item in self._items if item.status is JobStatus.WAITING]
         if not jobs:
             self.statusBar().showMessage("대기 중인 항목이 없습니다")
             return
@@ -316,36 +368,50 @@ class MainWindow(QMainWindow):
 
     # ---------- 브리지 신호 처리 (메인 스레드) ----------
 
-    def _on_status(self, index: int, status: JobStatus) -> None:
-        self._items[index].status = status
-        self._refresh_row(index)
+    def _on_status(self, uid: int, status: JobStatus) -> None:
+        item = self._item_of(uid)
+        if item is None:
+            return
+        item.status = status
+        self._refresh_row(self._row_of(uid))
 
-    def _on_progress(self, index: int, percent: float) -> None:
-        self._items[index].progress = percent
-        self._refresh_row(index)
+    def _on_progress(self, uid: int, percent: float) -> None:
+        item = self._item_of(uid)
+        if item is None:
+            return
+        item.progress = percent
+        self._refresh_row(self._row_of(uid))
 
-    def _on_finished(self, index: int, result: JobResult) -> None:
-        item = self._items[index]
+    def _on_finished(self, uid: int, result: JobResult) -> None:
+        item = self._item_of(uid)
+        if item is None:
+            return
         item.result = result
         item.status = result.status
-        item.progress = 100.0 if result.status is JobStatus.DONE else item.progress
-        self._refresh_row(index)
-        self._log(f"[{index + 1}] {result.status.value}: {result.detail}")
-        if self._table.currentRow() == index:
+        if result.status is JobStatus.DONE:
+            item.progress = 100.0
+        row = self._row_of(uid)
+        self._refresh_row(row)
+        self._log(f"[{uid}] {result.status.value}: {result.detail}")
+        if self._table.currentRow() == row:
             self._show_detail()
 
-    def _on_title_ready(self, index: int, stem: str) -> None:
-        if index < len(self._items):
-            self._items[index].title = stem
-            self._refresh_row(index)
+    def _on_title_ready(self, uid: int, stem: str) -> None:
+        item = self._item_of(uid)
+        if item is None:
+            return
+        item.title = stem
+        self._refresh_row(self._row_of(uid))
 
-    def _on_title_failed(self, index: int, message: str) -> None:
-        if index < len(self._items):
-            self._items[index].title_error = message
-            self._log(f"[{index + 1}] 제목 조회 실패: {message}")
+    def _on_title_failed(self, uid: int, message: str) -> None:
+        item = self._item_of(uid)
+        if item is None:
+            return
+        item.title_error = message
+        self._log(f"[{uid}] 제목 조회 실패: {message}")
 
     def _on_ask(self, ask: Ask) -> None:
-        index, payload = ask.payload
+        uid, payload = ask.payload
         if ask.kind == "overwrite":
             names = "\n".join(p.name for p in payload)
             answer = QMessageBox.question(
@@ -412,12 +478,15 @@ class MainWindow(QMainWindow):
 
     # ---------- 상세 패널 ----------
 
+    def _on_selection_changed(self) -> None:
+        self._show_detail()
+        self._refresh_controls()
+
     def _show_detail(self) -> None:
-        rows = self._table.selectionModel().selectedRows()
-        if not rows:
+        rows = self._selected_rows()
+        if len(rows) != 1:
             return
-        index = rows[0].row()
-        item = self._items[index]
+        item = self._items[rows[0]]
         self._d_url.setText(item.url)
         self._d_file.setText(item.title)
         result = item.result
@@ -437,10 +506,10 @@ class MainWindow(QMainWindow):
             self._d_thumb.clear()
 
     def _reveal_selected(self) -> None:
-        rows = self._table.selectionModel().selectedRows()
-        if not rows:
+        rows = self._selected_rows()
+        if len(rows) != 1:
             return
-        result = self._items[rows[0].row()].result
+        result = self._items[rows[0]].result
         if result and result.audio and result.audio.exists():
             subprocess.run(["open", "-R", str(result.audio)])
 
@@ -467,9 +536,14 @@ class MainWindow(QMainWindow):
     def _refresh_controls(self) -> None:
         running = self._is_running()
         has_tools = self._tools is not None
+        selected = self._selected_rows()
+        selected_states = {self._items[r].status for r in selected}
         self._start_btn.setEnabled(has_tools and not running)
         self._cancel_btn.setEnabled(running)
-        self._remove_btn.setEnabled(not running)
+        self._remove_btn.setEnabled(not running and bool(selected) and not (selected_states & RUNNING))
+        self._restart_btn.setEnabled(
+            has_tools and not running and bool(selected_states & RESTARTABLE)
+        )
 
     def _log(self, message: str) -> None:
         stamp = datetime.now().strftime("%H:%M:%S")
