@@ -1,6 +1,37 @@
 # music-manager
 
-YouTube URL을 입력하면 오디오를 M4A로 내려받고, 썸네일을 JPEG로 만든 뒤, `Artist` / `Title` / `Album` 메타데이터와 앨범 아트를 M4A에 기록하고 결과를 검증하는 macOS용 Python 도구입니다.
+YouTube URL을 입력하면 오디오를 M4A로 내려받고, 썸네일을 JPEG로 만든 뒤, `Artist` / `Title` / `Album` 메타데이터와 앨범 아트를 M4A에 기록하고 결과를 검증하는 macOS용 도구입니다. 데스크톱 앱(`Music Manager.app`)과 터미널 CLI(`music_manager.py`) 두 가지로 쓸 수 있습니다.
+
+## 앱 사용법 (GUI)
+
+1. 필요한 도구를 설치합니다 (아래 [설치](#설치) 참고).
+2. `Music Manager.app`을 실행합니다.
+3. URL을 입력하고 **URL 추가**(Enter)를 누릅니다. 여러 개는 **붙여넣기**로 한 번에 넣을 수 있습니다.
+4. **다운로드 시작**을 누르면 순서대로 처리합니다. 한 곡이 실패해도 다음 곡을 계속합니다.
+5. 목록에서 항목을 고르면 상세 정보(Artist, Title, Album, 썸네일)를 볼 수 있습니다.
+
+- 같은 영상(URL 형식이 달라도 같은 영상 ID)은 한 번만 목록에 들어갑니다.
+- 같은 이름의 파일이 있으면 덮어쓸지 묻습니다. 기본값은 **유지**입니다.
+- Artist/Title을 파일명에서 나눌 수 없으면 입력창이 뜹니다. 비우면 Album만 기록합니다.
+- 기록 전에 값을 보여주고 확인을 받습니다.
+- 저장 위치 기본값은 `~/Downloads/yt-music`이며 **폴더 선택**으로 바꿀 수 있습니다. 바꾼 위치는 다음 실행에도 유지됩니다.
+
+### 앱 빌드
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+./build/build_app.sh      # dist/Music Manager.app 생성
+./build/build_dmg.sh      # dist/Music Manager.dmg 생성 (선택)
+```
+
+도구 탐색만 확인하려면 `dist/Music Manager.app/Contents/MacOS/Music Manager --selftest`를 실행합니다.
+
+### 배포 시 참고
+
+- 빌드는 개발용 ad-hoc 서명입니다. 다른 Mac에 배포하려면 Developer ID 서명과 공증이 필요합니다.
+- 공증이 없으면 다른 Mac에서 처음 실행할 때 "확인되지 않은 개발자" 경고가 뜹니다. 시스템 설정 → 개인정보 보호 및 보안에서 열기를 허용해야 합니다.
+- yt-dlp, FFmpeg, ExifTool은 앱에 포함되지 않습니다. 앱은 Homebrew와 Python 설치 경로에서 찾습니다.
 
 ## 설치
 
