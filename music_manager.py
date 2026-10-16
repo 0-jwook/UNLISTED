@@ -172,11 +172,35 @@ def ensure_jpeg(audio: Path) -> Path:
     return jpg
 
 
-def ask_artist_title() -> tuple[Optional[str], Optional[str]]:
-    """자동 분리가 안 될 때 사용자에게 직접 입력받는다. 둘 다 비우면 Album만 기록한다."""
-    artist = input("  Artist (빈 입력 시 생략): ").strip() or None
-    title = input("  Title (빈 입력 시 생략): ").strip() or None
+def ask_artist_title(current_artist: Optional[str] = None, current_title: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
+    """Artist와 Title을 직접 입력받는다.
+
+    빈 입력이면 현재 값을 유지하고, '-'를 입력하면 해당 항목을 기록하지 않는다.
+    현재 값이 없으면 빈 입력은 기록하지 않음이다.
+    """
+    artist = _ask_field("Artist", current_artist)
+    title = _ask_field("Title", current_title)
     return artist, title
+
+
+def _ask_field(label: str, current: Optional[str]) -> Optional[str]:
+    hint = f" [현재: {current}]" if current else " (비우면 생략)"
+    answer = input(f"  {label}{hint}: ").strip()
+    if answer == "-":
+        return None
+    if answer == "":
+        return current or None
+    return answer
+
+
+def choose_write() -> str:
+    """기록 확인. 'y'=기록, 'n'=수정, 's'=건너뛰기를 돌려준다."""
+    answer = input("  이대로 진행할까요? [Y=기록 / n=아니요(수정) / s=건너뛰기] ").strip().lower()
+    if answer in ("", "y", "예"):
+        return "y"
+    if answer in ("s", "건너뛰기"):
+        return "s"
+    return "n"
 
 
 def show_preview(meta: Metadata, audio: Path, jpg: Path) -> None:
@@ -274,9 +298,16 @@ def process_url(url: str, out_dir: Path, dry_run: bool, cleanup: bool = True) ->
         print(f"  구분자(' - ')가 하나가 아니어서 자동 분리할 수 없습니다: {album}")
         artist, title = ask_artist_title()
     meta = Metadata(album=album, artist=artist, title=title)
-    show_preview(meta, audio, jpg)
-    if not confirm("  이 내용으로 기록하시겠습니까?", default=True):
-        return "건너뜀", f"사용자 취소(다운로드 파일 유지: {audio.name})"
+    while True:
+        show_preview(meta, audio, jpg)
+        choice = choose_write()
+        if choice == "y":
+            break
+        if choice == "s":
+            return "건너뜀", f"사용자 취소(다운로드 파일 유지: {audio.name})"
+        # 아니요: Artist/Title을 고친 뒤 다시 확인한다. Album은 파일명 값이라 그대로 둔다
+        artist, title = ask_artist_title(meta.artist, meta.title)
+        meta = Metadata(album=album, artist=artist, title=title)
 
     print("[5/6] 메타데이터 기록 및 앨범 아트 삽입…")
     write_tags(audio, jpg, meta)

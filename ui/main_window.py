@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from musiclib.metadata import Metadata
 from musiclib.models import JobResult, JobStatus
 from musiclib.pipeline import Tools, is_valid_url
 from musiclib.urls import split_pasted, video_id
@@ -356,15 +357,45 @@ class MainWindow(QMainWindow):
         elif ask.kind == "artist_title":
             ask.result = self._prompt_artist_title(payload)
         elif ask.kind == "confirm_write":
-            meta = payload
-            answer = QMessageBox.question(
-                self, "메타데이터 기록",
-                f"다음 값으로 기록할까요?\n\nArtist: {meta.artist or '(기록 안 함)'}\n"
-                f"Title: {meta.title or '(기록 안 함)'}\nAlbum: {meta.album}",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
-            )
-            ask.result = answer == QMessageBox.Yes
+            ask.result = self._confirm_write_dialog(payload)
         ask.event.set()
+
+    def _confirm_write_dialog(self, meta: Metadata) -> Optional[Metadata]:
+        """이대로 기록할지 묻는다. '아니요'를 고르면 Artist/Title을 고친 뒤 다시 묻는다.
+
+        반환: 기록할 메타데이터, 또는 None(기록 안 함).
+        """
+        while True:
+            box = QMessageBox(self)
+            box.setWindowTitle("메타데이터 기록")
+            box.setText("이대로 진행할까요?")
+            box.setInformativeText(
+                f"Artist: {meta.artist or '(기록 안 함)'}\n"
+                f"Title: {meta.title or '(기록 안 함)'}\n"
+                f"Album: {meta.album}"
+            )
+            yes_btn = box.addButton("예", QMessageBox.AcceptRole)
+            no_btn = box.addButton("아니요", QMessageBox.ActionRole)
+            box.addButton("기록 안 함", QMessageBox.RejectRole)
+            box.setDefaultButton(yes_btn)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is yes_btn:
+                return meta
+            if clicked is no_btn:
+                meta = self._edit_artist_title(meta)
+                continue
+            return None
+
+    def _edit_artist_title(self, meta: Metadata) -> Metadata:
+        """현재 값을 채운 입력창으로 Artist와 Title을 고친다. Album은 파일명 값이라 바꾸지 않는다."""
+        artist, ok1 = QInputDialog.getText(self, "Artist 수정", "Artist (비우면 기록하지 않음):", text=meta.artist or "")
+        if not ok1:
+            return meta
+        title, ok2 = QInputDialog.getText(self, "Title 수정", "Title (비우면 기록하지 않음):", text=meta.title or "")
+        if not ok2:
+            return Metadata(album=meta.album, artist=artist.strip() or None, title=meta.title)
+        return Metadata(album=meta.album, artist=artist.strip() or None, title=title.strip() or None)
 
     def _prompt_artist_title(self, album: str) -> tuple[Optional[str], Optional[str]]:
         message = (

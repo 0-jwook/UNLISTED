@@ -35,8 +35,8 @@ class Hooks:
     confirm_overwrite: Callable[[list[Path]], bool] = lambda paths: False
     # 자동 판단이 안 되면 (Artist, Title)을 받는다. None이면 Album만 기록
     ask_artist_title: Callable[[str], tuple[Optional[str], Optional[str]]] = lambda album: (None, None)
-    # 기록 전 미리보기 확인. False면 기록하지 않는다
-    confirm_write: Callable[[Metadata], bool] = lambda meta: True
+    # 기록 전 확인. 그대로 쓸 값(수정했다면 수정된 값)을 돌려주고, None이면 기록하지 않는다
+    confirm_write: Callable[[Metadata], Optional[Metadata]] = lambda meta: meta
     on_status: Callable[[JobStatus], None] = lambda status: None
     on_progress: Callable[[float], None] = lambda percent: None
     log: Callable[[str], None] = lambda message: None
@@ -73,6 +73,10 @@ def process_url(
         hooks.log(f"예상치 못한 오류: {e}")
         hooks.on_status(JobStatus.FAILED)
         return JobResult(JobStatus.FAILED, f"예상치 못한 오류: {e}")
+
+
+def _result_info(audio: Path, jpg: Path, meta: Metadata) -> dict:
+    return dict(audio=audio, thumbnail=jpg, artist=meta.artist, title=meta.title, album=meta.album)
 
 
 def _process(
@@ -128,11 +132,13 @@ def _process(
         artist, title = hooks.ask_artist_title(album)
     meta = Metadata(album=album, artist=artist or None, title=title or None)
 
-    info = dict(audio=audio, thumbnail=jpg, artist=meta.artist, title=meta.title, album=meta.album)
-
-    if not hooks.confirm_write(meta):
+    confirmed = hooks.confirm_write(meta)
+    if confirmed is None:
         hooks.on_status(JobStatus.SKIPPED)
+        info = _result_info(audio, jpg, meta)
         return JobResult(JobStatus.SKIPPED, f"사용자 취소(다운로드 파일 유지: {audio.name})", **info)
+    meta = confirmed
+    info = _result_info(audio, jpg, meta)
 
     hooks.on_status(JobStatus.TAGGING)
     write_tags(tools.exiftool, audio, jpg, meta, env=tools.env)

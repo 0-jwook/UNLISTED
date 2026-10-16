@@ -98,6 +98,8 @@ def test_full_run_with_fake_tools_shows_result(qapp, tmp_path, monkeypatch):
         pytest.skip("ffmpeg/exiftool이 필요합니다")
     # 덮어쓰기 질문이 없도록 임시 폴더를 쓰고, 기록 확인은 자동으로 예
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    # 기록 확인은 '예'로 답한다 (실제 대화상자 대신)
+    monkeypatch.setattr(MainWindow, "_confirm_write_dialog", lambda self, meta: meta)
     tools = Tools(_fake_ytdlp(tmp_path), FFMPEG, EXIFTOOL)
     window = _window(qapp, tmp_path, tools=tools)
     window._add_urls(["https://www.youtube.com/watch?v=lZHyUw7LWSw"])

@@ -20,6 +20,9 @@ from musiclib.pipeline import Hooks, Tools, process_url
 POLL_SECONDS = 0.2
 
 
+UNANSWERED = object()  # 응답 없음과 None(=기록 안 함) 응답을 구분하기 위한 표식
+
+
 @dataclass
 class Ask:
     """메인 스레드가 응답을 채우고 event로 알리는 요청 상자."""
@@ -27,7 +30,7 @@ class Ask:
     kind: str
     payload: Any
     event: threading.Event = field(default_factory=threading.Event)
-    result: Any = None
+    result: Any = UNANSWERED
 
 
 class Bridge(QObject):
@@ -68,7 +71,8 @@ class DownloadWorker(QThread):
         return Hooks(
             confirm_overwrite=lambda paths: self._ask(index, "overwrite", paths, default=False),
             ask_artist_title=lambda album: self._ask(index, "artist_title", album, default=(None, None)),
-            confirm_write=lambda meta: self._ask(index, "confirm_write", meta, default=True),
+            # 취소되면 기록하지 않는다(None)
+            confirm_write=lambda meta: self._ask(index, "confirm_write", meta, default=None),
             on_status=lambda status: self.bridge.status.emit(index, status),
             on_progress=lambda percent: self.bridge.progress.emit(index, percent),
             log=lambda message: self.bridge.log.emit(f"[{index + 1}] {message}"),
@@ -81,7 +85,7 @@ class DownloadWorker(QThread):
         while not ask.event.wait(POLL_SECONDS):
             if self.cancel.is_set():
                 return default
-        return default if ask.result is None else ask.result
+        return default if ask.result is UNANSWERED else ask.result
 
 
 class TitleLookup(QRunnable):

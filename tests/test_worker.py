@@ -31,7 +31,9 @@ def _answer(bridge, answers):
     def handle(ask):
         index, payload = ask.payload
         asked.append(ask.kind)
-        ask.result = answers.get(ask.kind)
+        answer = answers.get(ask.kind)
+        # 값이 함수면 질문 내용(payload)을 받아 응답을 만든다
+        ask.result = answer(payload) if callable(answer) else answer
         ask.event.set()
 
     bridge.ask.connect(handle)
@@ -46,7 +48,7 @@ def test_worker_continues_after_failure_and_reports_each_job(qapp, tmp_path):
     jobs = [(0, "bad-url"), (1, "https://www.youtube.com/watch?v=lZHyUw7LWSw")]
 
     worker = DownloadWorker(jobs, tmp_path / "out", ok_tools, bridge, cancel=__import__("threading").Event())
-    _answer(bridge, {"confirm_write": True})
+    _answer(bridge, {"confirm_write": lambda meta: meta})  # 그대로 기록
     worker.run()  # 같은 스레드에서 실행해 신호가 바로 전달되도록 한다
 
     assert results[0].status is JobStatus.FAILED

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from musiclib.metadata import Metadata
 from musiclib.models import JobStatus
 from musiclib.pipeline import Hooks, Tools, is_valid_url, process_url
 
@@ -118,10 +119,25 @@ def test_user_declining_write_keeps_downloaded_file(tmp_path):
         "https://www.youtube.com/watch?v=x",
         out,
         tools,
-        Hooks(confirm_write=lambda meta: False),
+        Hooks(confirm_write=lambda meta: None),
     )
     assert result.status is JobStatus.SKIPPED
     assert result.audio is not None and result.audio.exists()
+
+
+@needs_media_tools
+def test_user_edit_at_confirm_is_what_gets_written(tmp_path):
+    out = tmp_path / "out"
+    tools = Tools(_fake_ytdlp(tmp_path), FFMPEG, EXIFTOOL)
+
+    def edit(meta):
+        # '아니요' 후 사용자가 고친 값을 돌려주는 상황
+        return Metadata(album=meta.album, artist="고친 가수", title="고친 제목")
+
+    result = process_url("https://www.youtube.com/watch?v=x", out, tools, Hooks(confirm_write=edit))
+    assert result.status is JobStatus.DONE, result.detail
+    assert (result.artist, result.title) == ("고친 가수", "고친 제목")
+    assert result.album == TITLE
 
 
 @needs_media_tools
