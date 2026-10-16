@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from musiclib.cleanup import remove_intermediates, snapshot
+
 DEFAULT_OUT_DIR = Path.home() / "Downloads" / "yt-music"
 REQUIRED_TOOLS = {
     "yt-dlp": 'python3 -m pip install -U "yt-dlp[default]"',
@@ -226,8 +228,11 @@ def verify(audio: Path, jpg: Path, meta: Metadata) -> list[str]:
     return problems
 
 
-def process_url(url: str, out_dir: Path, dry_run: bool) -> tuple[str, str]:
-    """URL 한 개를 처리하고 (상태, 설명)을 반환한다. 상태: 성공 / 건너뜀 / 실패 / 미리보기."""
+def process_url(url: str, out_dir: Path, dry_run: bool, cleanup: bool = True) -> tuple[str, str]:
+    """URL 한 개를 처리하고 (상태, 설명)을 반환한다. 상태: 성공 / 건너뜀 / 실패 / 미리보기.
+
+    cleanup이 True면 성공 후 썸네일과 ExifTool 백업을 지운다(완성 M4A는 남긴다).
+    """
     print("[1/6] 파일명 확인 중…")
     stem = expected_stem(url)
     print(f"  예상 파일명: {stem}")
@@ -249,6 +254,8 @@ def process_url(url: str, out_dir: Path, dry_run: bool) -> tuple[str, str]:
             print(f"  구분자(' - ')가 하나가 아니므로 실제 처리 시 Artist/Title을 직접 입력받습니다. Album: {stem}")
         return "미리보기", stem
 
+    # 정리할 때 "이번 작업에서 새로 생긴 파일"을 가리기 위해 다운로드 전 상태를 기록한다
+    before = snapshot(out_dir)
     print("[2/6] 다운로드 중 (오디오 M4A + 썸네일, 시간이 걸릴 수 있습니다)…")
     audio = download(url, out_dir, overwrite)
     print(f"  저장됨: {audio.name}")
@@ -278,6 +285,11 @@ def process_url(url: str, out_dir: Path, dry_run: bool) -> tuple[str, str]:
     problems = verify(audio, jpg, meta)
     if problems:
         return "실패", "검증 실패: " + "; ".join(problems)
+
+    if cleanup:
+        removed = remove_intermediates(out_dir, album, before, overwrite)
+        if removed:
+            print(f"  중간 파일 정리: {', '.join(removed)}")
     return "성공", audio.name
 
 
@@ -285,6 +297,8 @@ def parse_args(argv: Optional[list[str]]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="YouTube 음원 다운로드 및 M4A 메타데이터 기록")
     parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR), help="저장 디렉터리 (기본: ~/Downloads/yt-music)")
     parser.add_argument("--dry-run", action="store_true", help="다운로드/기록 없이 파일명 분석 결과만 출력")
+    parser.add_argument("--keep-intermediates", action="store_true",
+                        help="완료 후 썸네일과 ExifTool 백업을 지우지 않는다")
     return parser.parse_args(argv)
 
 
@@ -312,7 +326,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             continue
 
         try:
-            status, detail = process_url(url, out_dir, args.dry_run)
+            status, detail = process_url(url, out_dir, args.dry_run, cleanup=not args.keep_intermediates)
         except ToolError as e:
             status, detail = "실패", str(e)
         except Exception as e:  # 예상치 못한 오류도 다음 곡 처리를 막지 않는다
