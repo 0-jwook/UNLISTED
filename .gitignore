@@ -18,3 +18,7 @@ dist/
 
 # macOS
 .DS_Store
+
+# PyInstaller 생성 스펙 (build_app.sh가 매번 다시 만듦)
+build/*.spec
+.pytest_cache/
