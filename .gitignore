@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Build output
+build/work/
+dist/
+*.spec.bak
+
+# 다운로드한 음원·썸네일·백업은 절대 커밋하지 않음
+*.m4a
+*.m4a_original
+*.jpg
+*.webp
+*.png.tmp
+
+# macOS
+.DS_Store
