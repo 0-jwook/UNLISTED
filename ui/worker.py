@@ -46,13 +46,14 @@ class DownloadWorker(QThread):
     """작업 목록을 순서대로 처리한다. 한 곡이 실패해도 다음 곡을 계속 처리한다."""
 
     def __init__(self, jobs: list[tuple[int, str]], out_dir: Path, tools: Tools, bridge: Bridge,
-                 cancel: threading.Event, parent: Optional[QObject] = None):
+                 cancel: threading.Event, cleanup: bool = True, parent: Optional[QObject] = None):
         super().__init__(parent)
         self.jobs = jobs
         self.out_dir = out_dir
         self.tools = tools
         self.bridge = bridge
         self.cancel = cancel
+        self.cleanup = cleanup
 
     def run(self) -> None:
         for index, url in self.jobs:
@@ -60,7 +61,7 @@ class DownloadWorker(QThread):
                 self.bridge.finished_job.emit(index, JobResult(JobStatus.CANCELLED, "사용자가 취소했습니다"))
                 continue
             hooks = self._hooks(index)
-            result = process_url(url, self.out_dir, self.tools, hooks, self.cancel)
+            result = process_url(url, self.out_dir, self.tools, hooks, self.cancel, cleanup=self.cleanup)
             self.bridge.finished_job.emit(index, result)
 
     def _hooks(self, index: int) -> Hooks:

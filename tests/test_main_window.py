@@ -28,9 +28,11 @@ def _close_windows(qapp):
     # 창을 닫고 백그라운드 제목 조회가 끝난 뒤에 테스트를 마친다 (삭제 중 신호 사용 방지)
     for window in _OPENED:
         window.close()
+        window.deleteLater()
     _OPENED.clear()
     QThreadPool.globalInstance().waitForDone(10_000)
     qapp.processEvents()
+    qapp.sendPostedEvents(None, 0)
 
 
 _OPENED: list[MainWindow] = []

@@ -22,6 +22,14 @@ class AppSettings:
     def set_out_dir(self, path: Path) -> None:
         self._store.setValue("paths/out_dir", str(path))
 
+    def cleanup_enabled(self) -> bool:
+        # 기본값은 켜짐: 완성 M4A만 남긴다
+        value = self._store.value("options/cleanup", True)
+        return value in (True, "true", "True", 1, "1")
+
+    def set_cleanup_enabled(self, enabled: bool) -> None:
+        self._store.setValue("options/cleanup", bool(enabled))
+
     def geometry(self) -> QByteArray | None:
         value = self._store.value("window/geometry")
         return value if isinstance(value, QByteArray) else None

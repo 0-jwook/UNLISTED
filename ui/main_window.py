@@ -15,6 +15,7 @@ from PySide6.QtGui import QClipboard, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QCheckBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -132,6 +133,10 @@ class MainWindow(QMainWindow):
         action_row = QHBoxLayout()
         self._remove_btn = QPushButton("선택 삭제")
         self._remove_btn.clicked.connect(self._remove_selected)
+        self._cleanup_box = QCheckBox("완료 후 썸네일·백업 파일 삭제")
+        self._cleanup_box.setToolTip("완성된 M4A만 남기고, 이번 작업에서 만든 썸네일과 백업을 지웁니다")
+        self._cleanup_box.setChecked(self._settings.cleanup_enabled())
+        self._cleanup_box.toggled.connect(self._settings.set_cleanup_enabled)
         self._start_btn = QPushButton("다운로드 시작")
         self._start_btn.setDefault(True)
         self._start_btn.clicked.connect(self._start)
@@ -139,6 +144,7 @@ class MainWindow(QMainWindow):
         self._cancel_btn.clicked.connect(self._cancel_run)
         action_row.addWidget(self._remove_btn)
         action_row.addStretch(1)
+        action_row.addWidget(self._cleanup_box)
         action_row.addWidget(self._cancel_btn)
         action_row.addWidget(self._start_btn)
         root.addLayout(action_row)
@@ -288,7 +294,10 @@ class MainWindow(QMainWindow):
             return
         self._out_dir.mkdir(parents=True, exist_ok=True)
         self._cancel = threading.Event()
-        self._worker = DownloadWorker(jobs, self._out_dir, self._tools, self._bridge, self._cancel)
+        self._worker = DownloadWorker(
+            jobs, self._out_dir, self._tools, self._bridge, self._cancel,
+            cleanup=self._cleanup_box.isChecked(),
+        )
         self._worker.finished.connect(self._on_worker_finished)
         self._log(f"다운로드 시작: {len(jobs)}개")
         self._refresh_controls()
